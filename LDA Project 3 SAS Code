@@ -1,0 +1,729 @@
+/********** Task 1 (severity) ************/
+
+/* LMM direct likelihood */ 
+
+/* full model: severity = t group age chronicity group*t age*t t*chronicity group*chronicity age*chronicity age*group t*chronicity*group t*age*chronicity t*age*group */
+
+proc mixed data= lda.aculda2 nobound method=ml covtest;
+class id tclass;
+model severity = t t*t age group*t age*t/ solution;
+random intercept t/ type=un subject=id g gcorr v vcorr solution;
+Run;
+/* remove: t*chronicity*group t*age*chronicity age*chronicity t*chronicity chronicity*group t*age*group age*group chronicity */
+
+/* using just random intercepts model (reml)*/
+proc mixed data= lda.aculda2 nobound method=reml covtest;
+class id tclass;
+model severity = t t*t age group*t age*t/ solution;
+random intercept/ type=un subject=id g gcorr v vcorr solution;
+Run;
+
+/* likelihood ratio test ran.sl. vs int. : 8097.9-8097.6, df=12-9, p-value=0.96, no sign.diff*/
+
+
+/* MI LMM */
+/* multiple imputation - mcmc */  
+proc mi data=lda.aculda3 seed=486048 simple out=lda.aculda4 nimpute=10 round=0.1 minimum=0;
+var age chronicity sev0 sev3 sev12;
+by group;
+run;
+
+/* transforming dataset from wide to long */
+data lda.aculda4b;
+set lda.aculda4;
+array x (3) sev0 sev3 sev12;
+do j=1 to 3;
+severity=x(j);
+time=j;
+output;
+end;
+run;
+data lda.aculda4b;
+set lda.aculda4b;
+drop sev0 sev3 sev12 j;
+if time eq 1 then t=log(1+0);
+if time eq 2 then t=log(1+3);
+if time eq 3 then t=log(1+12);
+drop time;
+tclass=t;
+run;
+
+proc sort data=lda.aculda4b;
+by _imputation_;
+run;
+
+/* mi - lmm */
+proc mixed data=lda.aculda4b method=reml asycov covtest nobound;
+class tclass id;
+by _imputation_;
+model severity = t t*t age group*t age*t/ s covb;
+random intercept t/type=un subject=ID g gcorr v vcorr solution;
+ods output solutionf = lmmsolution covb = lmmcovb covparms = lmmcovparms asycov = lmmasycov;
+run;
+
+/* Combining 10 Separate Analyses (mean structure) */
+proc mianalyze parms=lmmsolution covb(effectvar=rowcol)=lmmcovb;
+title2 'COMBINING 10 MIXED MODEL ANALYSES (MEAN STRUCTURE)';
+modeleffects intercept t t*t age group*t age*t;
+run;
+
+proc print data=lda.aculda4b;
+run;
+
+/********** MI GEE **********/
+/*Transform to horizontal dataset*/
+
+DATA  horiz ;
+INFILE  "/home/moegelmose911/stats/aculda2wide.txt" 
+     DSD 
+     LRECL= 36 ;
+INPUT
+ id
+ age
+ chronicity
+ group
+ sev1
+ sev2
+ sev3
+;
+RUN;
+
+/* Monotone multiple imputation*/
+proc mi data=horiz seed=459864 simple nimpute=10
+round=0.1 out=horiz2 minimum=0;
+title 'Monotone multiple imputation';
+mcmc impute = monotone;
+var age chronicity group sev1 sev2 sev3;
+run;
+
+proc print data=horiz2;
+run;
+
+/*Dichotomization (1=below median 23 (22.77))*/
+
+data horiz3;
+set horiz2;
+sev1_bin=.;
+sev2_bin=.;
+sev3_bin=.;
+if sev1<=23 then sev1_bin=1;
+if sev1>23 then sev1_bin=0;
+if sev1=. then sev1_bin=.;
+if sev2<=23 then sev2_bin=1;
+if sev2>23 then sev2_bin=0;
+if sev2=. then sev2_bin=.;
+if sev3<=23 then sev3_bin=1;
+if sev3>23 then sev3_bin=0;
+if sev3=. then sev3_bin=.;
+run;
+
+data aculda2;
+set student.aculda2;
+sev_bin=.;
+if severity<=23 then sev_bin=1;
+if severity>23 then sev_bin=0;
+if severity=. then sev_bin=.;
+run;
+
+data aculda2;
+set aculda2;
+t=log(1+time);
+run;
+
+/* Standard GEE*/
+data aculda2;
+set aculda2;
+timeclss = time;
+run;
+
+
+proc gee data=aculda2 plots=histogram;
+title 'Standard GEE for acupuncture data';
+class id timeclss;
+model severity= t age  group*t  age*t t*t / dist=normal;
+repeated subject=id / within=timeclss corr=un;
+run;
+
+/* WGEE MI*/
+data horiz4;
+set horiz3;
+array y (3) sev1 sev2 sev3;
+do j=1 to 3;
+sev=y(j);
+time=j;
+timeclss=time;
+id2=1000*_imputation_+id;
+output;
+end;
+run;
+
+proc sort data=horiz4;
+by _imputation_ id2;
+run;
+
+data horiz4;
+set horiz4;
+if time=1 then time=0;
+if time=3 then time=12;
+if time=2 then time=3;
+run;
+
+data horiz4;
+set horiz4;
+by id2;
+prev_sev=lag(sev);
+if time=0 then prev_sev=1;
+run;
+
+data horiz4;
+set horiz4;
+if sev<=23 then sev_bin=1;
+if sev>23 then sev_bin=0;
+sev_bin=sev_bin+sev-sev;
+run;
+
+data horiz4;
+set horiz4;
+t=log(1+time);
+timeclss=t;
+run;
+
+ods graphics on;
+proc gee data=horiz4 plots=histogram;
+title 'Weighted GEE for Acupuncture Data Based on Multiple
+Imputation to Monotonize - OBSLEVEL';
+by _imputation_;
+class id timeclss;
+model sev = t age group*t  age*t / dist=normal;
+repeated subject=id / within=timeclss corr=unstr ecovb covb;
+missmodel prev_sev age group group*prev_sev timeclss / type=obslevel; /*http://support.sas.com/documentation/cdl/en/statug/67523/HTML/default/viewer.htm#statug_gee_examples03.htm*/
+ods output GEEEmpPEst=gmparms parminfo=gmpinfo modelinfo=modelinfo GEERCov=gmcovb;
+run;
+
+proc mianalyze parms=gmparms parminfo=gmpinfo covb=gmcovb;
+title 'Multiple Imputation Analysis After Weighted GEE for Acupuncture Data';
+modeleffects intercept  t age  group*t age*t ;
+run;
+
+
+
+/* Standard GEE after MI */
+ods graphics on;
+proc gee data=horiz4 plots=histogram;
+title 'Standard GEE for GSA Data Based on
+Multiple Imputation to Monotonize';
+by _imputation_;
+class id timeclss;
+model sev = t age  group*t  age*t / dist=normal;
+repeated subject=id / within=timeclss corr=un ecovb;
+ods output GEEEmpPEst=gmparms parminfo=gmpinfo
+modelinfo=modelinfo GEERCov=gmcovb;
+run;
+
+proc mianalyze parms=gmparms parminfo=gmpinfo covb=gmcovb;
+title 'Multiple Imputation Analysis After Weighted GEE for Acupuncture Data';
+modeleffects intercept  t age  group*t age*t ;
+run;
+
+
+/************Sensitivity Analysis***************/
+/*Tipping point analysis*/
+proc sort data=horiz;
+by group;
+run;
+proc mi data=horiz seed=486048 simple out=horiz_sa nimpute=10 round=0.1 minimum=0;
+title 'Shift multiple imputation';
+class group;
+var age group sev1 sev2 sev3;
+fcs reg;
+mnar adjust (sev2 / shift=11 adjustobs=(group='1'));
+mnar adjust (sev3/ shift=11 adjustobs=(group='1'));
+by group;
+run;
+
+/* WGEE MI*/
+data horiz_sa;
+set horiz_sa;
+array y (3) sev1 sev2 sev3;
+do j=1 to 3;
+sev=y(j);
+time=j;
+timeclss=time;
+id2=1000*_imputation_+id;
+output;
+end;
+run;
+
+proc sort data=horiz_sa;
+by _imputation_ id2;
+run;
+
+data horiz_sa;
+set horiz_sa;
+if time=1 then time=0;
+if time=3 then time=12;
+if time=2 then time=3;
+run;
+
+data horiz_sa;
+set horiz_sa;
+by id2;
+prev_sev=lag(sev);
+if time=0 then prev_sev=1;
+run;
+
+data horiz_sa;
+set horiz_sa;
+t=log(1+time);
+timeclss=t;
+run;
+
+
+proc sort data=horiz_sa;
+by _imputation_;
+run;
+
+ods graphics on;
+proc gee data=horiz_sa plots=histogram;
+title 'Weighted GEE for Acupuncture Data Based on Multiple
+Imputation to Monotonize - OBSLEVEL';
+by _imputation_;
+class id timeclss;
+model sev = t age group*t  age*t / dist=normal;
+repeated subject=id / within=timeclss corr=ind ecovb covb;
+ods output GEEEmpPEst=gmparms parminfo=gmpinfo modelinfo=modelinfo GEERCov=gmcovb;
+run;
+
+proc mianalyze parms=gmparms parminfo=gmpinfo covb=gmcovb;
+title 'Multiple Imputation Analysis After Weighted GEE for Acupuncture Data';
+modeleffects intercept  t age  group*t age*t ;
+run;
+
+/* NCMV*/
+
+proc sort data=horiz2;
+by group;
+run;
+
+proc mi data=horiz2 seed=486048 simple out=horiz_sa nimpute=1 minimum=0;
+title 'Model multiple imputation';
+var age group sev1 sev2 sev3;
+monotone reg;
+mnar model (sev1 sev2 sev3 / modelobs=ncmv);
+by group;
+run;
+
+
+/*SAS SA*/
+
+/*---------------------------------------------------------*/
+/*--- Performs multiple imputation analysis             ---*/
+/*--- for specified shift parameters:                   ---*/
+/*--- data= input data set                              ---*/
+/*--- smin= min shift parameter                         ---*/
+/*--- smax= max shift parameter                         ---*/
+/*--- sinc= increment of the shift parameter            ---*/
+/*--- outparms= output reg parameters                   ---*/
+/*---------------------------------------------------------*/
+%macro miparms( data=, smin=, smax=, sinc=, outparms=);
+ods select none;
+
+data &outparms;
+   set _null_;
+run;
+
+/*------------ # of shift values ------------*/
+%let ncase= %sysevalf( (&smax-&smin)/&sinc, ceil );
+
+/*---- Multiple imputation analysis for each shift ----*/
+%do jc=0 %to &ncase;
+   %let sj= %sysevalf( &smin + &jc * &sinc);
+
+  /*---- Generates 25 imputed data sets ----*/
+   proc mi data=&data seed=14823 out=outmi minimum=0;
+      class group;
+      fcs reg;
+      mnar adjust( sev2 / shift=&sj  adjustobs=(group='1') );
+      mnar adjust( sev3 / shift=&sj  adjustobs=(group='1') );
+      var age group sev1 sev2 sev3;
+   run;
+
+
+/* WGEE MI*/
+data horiz_sa;
+set outmi;
+array y (3) sev1 sev2 sev3;
+do j=1 to 3;
+sev=y(j);
+time=j;
+timeclss=time;
+id2=1000*_imputation_+id;
+output;
+end;
+run;
+
+proc sort data=horiz_sa;
+by _imputation_ id2;
+run;
+
+data horiz_sa;
+set horiz_sa;
+if time=1 then time=0;
+if time=3 then time=12;
+if time=2 then time=3;
+run;
+
+data horiz_sa;
+set horiz_sa;
+by id2;
+prev_sev=lag(sev);
+if time=0 then prev_sev=1;
+run;
+
+data horiz_sa;
+set horiz_sa;
+t=log(1+time);
+timeclss=t;
+run;
+
+
+proc sort data=horiz_sa;
+by _imputation_;
+run;
+
+
+proc gee data=horiz_sa;
+by _imputation_;
+class id timeclss;
+model sev = t age group*t  age*t / dist=normal;
+repeated subject=id / within=timeclss corr=ind ;
+ods output GEEEmpPEst=regparm ;
+run;
+
+
+  /*------ Perform reg test -------*/
+ /*  proc reg data=outmi;
+      model y1= Trt y0;
+      by  _Imputation_;
+      ods output parameterestimates=regparm;
+   run;*/
+
+  /*------ Combine reg results -------*/
+   proc mianalyze parms=regparm ;
+      modeleffects group*t;
+      ods output parameterestimates=miparm;
+   run;
+
+   data miparm;
+      set miparm;
+      Shift= &sj;
+      keep Shift Probt;
+   run;
+
+  /*----- Output multiple imputation results ----*/
+   data &outparms;
+      set &outparms miparm;
+   run;
+
+%end;
+
+ods select all;
+%mend miparms;
+
+
+
+%miparms(data=horiz, smin=0, smax=12, sinc=0.1, outparms=parm1);
+
+
+title 'P-value Plot';
+proc sgplot data=parm1;
+   series x=Shift y=Probt / lineattrs=graphfit(color=blue);
+   refline 0.05 / axis=y lineattrs=graphfit(thickness=1px pattern=shortdash);
+   xaxis label="Shift Parameter";
+   yaxis label="P-value";
+run;
+
+------------------------------------------------------------------
+----------------FREQUENCY PART-----------------------------
+/* exploratory*/
+proc sort data=home.aculda2;
+by time;
+run;
+proc univariate data=home.aculda2;
+by time group;
+var frequency;
+run;
+
+/*MEAN STRUCTURE*/
+/* Individual profiles */
+Proc sort data=home.aculda2 out=sample nodupkey dupout=Duplicate;
+by id;   
+Run;
+
+proc surveyselect data=sample method=srs n=60 out=random_sample;
+run;
+
+proc sort data=home.aculda2;
+by id;
+run;
+
+proc sort data=random_sample;
+by id;
+run;
+
+data home.profiles;
+merge  random_sample(in=b) home.aculda2(in=a);
+by id;
+if a and b;
+run;
+
+proc SGplot data = home.profiles noautolegend;
+series x=time y=frequency / group =id 
+LineAttrs= (pattern=1);
+xaxis label = 'Time' ;
+run;
+
+proc SGpanel data = home.profiles;
+PanelBy group / columns=2;
+series x=time y=frequency / group =id
+LineAttrs= (pattern=1);
+colaxis label = 'Time' ;
+run;
+
+
+/*Mean structure by age groups*/
+data home.aculda2;
+set home.aculda2;
+if age <48 then agegrp=1;
+else if age >= 48 then agegrp=2;
+/*else if 50 <= age < 66 then agegrp=3;
+/*else if 50 <= age < 66 then agegrp=4;*/
+run;
+
+Legend1 label=(color=black height=2 'Age group') value=(color=black height=2 'Below 48 years' 'Above 48 years');
+proc gplot data=home.aculda2;
+plot frequency*time=agegrp  / haxis=axis1 vaxis=axis2 legend=legend1;
+symbol1 c=darkred  i=std1mjt w=2 mode=include line=1;
+symbol2 c=darkblue  i=std1mjt w=2 mode=include line=1;
+symbol3 c=darkred  i=std1mjt w=2 mode=include line=1;
+symbol4 c=darkblue  i=std1mjt w=2 mode=include line=1;
+axis1 label=(h=2  'Time (months)') value=(h=1.5) order=(-3 to
+15 by 3) minor=none;
+axis2 label=(h=2 A=90 'Frequency') value=(h=1.5) order=(8 to 20 by 2) minor=none;
+run;quit;
+
+data home.aculda2;
+set home.aculda2;
+if chronicity <20 then chrongrp=1;
+else if chronicity >=20 then chrongrp=2;
+/*else if 37 <= chronicity < 100 then chrongrp=3;*/
+run;
+
+Legend1 label=(color=black height=2 'Chronicity groups') value=(color=black height=2 'Below 20' 'Above 20' );
+proc gplot data=home.aculda2;
+plot frequency*time=chrongrp  / haxis=axis1 vaxis=axis2 legend=legend1;
+symbol1 c=darkred  i=std1mjt w=2 mode=include line=1;
+symbol2 c=darkblue i=std1mjt w=2 mode=include line=1;
+axis1 label=(h=2  'Time (months)') value=(h=1.5) order=(-3 to
+15 by 3) minor=none;
+axis2 label=(h=2 A=90 'Frequency') value=(h=1.5) order=(8 to 20 by 5) minor=none;
+run;quit;
+
+/* --------- NO IMPUTATION ----------*/
+/* GLMM */
+data stats.aculda2;
+set stats.aculda2;
+timeclss = time;
+run;
+
+
+proc glimmix data=stats.aculda2 method=quad(qpoints=5) ;
+class id timeclss;
+model frequency = time severity
+time*severity  severity*severity  / solution dist=poisson;
+random intercept / subject=id type=unr gc;
+run;
+
+/* ---------  IMPUTATION ----------*/
+proc transpose data=stats.aculda2 out=stats.horizsev prefix= sev;
+    by id age chronicity group;
+    id time;
+    var severity;
+run;
+
+proc transpose data=stats.aculda2 out=stats.horizfreq prefix= freq;
+    by id age chronicity group;
+    id time;
+    var frequency;
+run;
+
+data stats.horiz;
+merge stats.horizsev stats.horizfreq;
+by id age chronicity group;
+run;
+
+data stats.horiz;
+set stats.horiz (rename=(sev0=sev1 sev3=sev2 sev12=sev3 freq0=freq1 freq3=freq2 freq12 = freq3));
+run;
+
+/* imputate */
+PROC MI data=stats.horiz OUT=stats.horizlgmi simple NIMPUTE=10 SEED=9455 minimum=0;
+FCS reg(sev1=age  chronicity);
+FCS reg(sev2=age  chronicity sev1 freq1 ); 
+FCS reg(sev3=age  chronicity sev1 sev2 freq1 freq2 ); 
+FCS reg(freq1=age  chronicity sev1);
+FCS reg(freq2=age  chronicity sev1 sev2 freq1);
+FCS reg(freq3=age  chronicity sev1 sev2 sev3 freq1 freq2);
+VAR age group chronicity sev1 sev2 sev3 freq1 freq2 freq3;
+RUN;
+
+/* make data vertical again */
+data stats.horizlgmi3;
+set stats.horizlgmi;
+array x (3) sev1 sev2 sev3;
+array y (3) freq1 freq2 freq3;
+do j=1 to 3;
+severity=x(j);
+frequency=y(j);
+time=j;
+output;
+end;
+run;
+
+data stats.horizlgmi4;
+set stats.horizlgmi3;
+if time=1 then time=0;
+if time=3 then time=12;
+if time=2 then time=3;
+format frequency 9.0;
+run;
+
+/* GLMM */
+proc glimmix data=stats.horizlgmi4 method=quad(qpoints=5) ;
+class id  ;
+by _imputation_;
+model frequency = time severity time*severity  severity*severity  / solution dist=poisson covb ;
+random intercept / subject=id type=un  gc;
+ods output ParameterEstimates=nlparms
+CovB=nlcovb;
+run;
+
+/* Inference */
+proc mianalyze parms=nlparms ;
+modeleffects Intercept time severity time*severity  severity*severity;
+run;
+
+/* NCMV Sensitivity analysis*/
+/* first make all data monotone missing w/ MI*/
+/* Monotone multiple imputation*/
+proc sort data=lda.horiz;
+by group;
+run;
+
+proc mi data=lda.horiz seed=459864 simple nimpute=10
+round=0.1 out=lda.horiz2 minimum=0;
+title 'Monotone multiple imputation';
+var age chronicity group sev1 freq1 sev2 freq2 sev3 freq3;
+mcmc impute = monotone;
+by group;
+run;
+
+proc sort data=lda.horiz2;
+by group;
+run;
+
+proc mi data=lda.horiz2 seed=486048 simple out=lda.horiz_ncmv nimpute=1 minimum=0;
+title 'Model multiple imputation';
+var age group sev1 freq1 sev2 freq2 sev3 freq3;
+monotone reg;
+mnar model (sev1 freq1 sev2 freq2 sev3 freq3 / modelobs=ncmv);
+by group;
+run;
+
+/* made data vertical again */
+data lda.ncmv;
+set lda.horiz_ncmv;
+array x (3) sev1 sev2 sev3;
+array y (3) freq1 freq2 freq3;
+do j=1 to 3;
+severity=x(j);
+frequency=y(j);
+time=j;
+output;
+end;
+run;
+
+data lda.ncmv;
+set lda.ncmv;
+if time=1 then time=0;
+if time=3 then time=12;
+if time=2 then time=3;
+format frequency 9.0;
+run;
+
+proc sort data=lda.ncmv;
+by _imputation_;
+run;
+
+proc glimmix data=lda.ncmv method=quad(qpoints=5) ;
+class id ;
+by _imputation_;
+model frequency = time severity time*severity  severity*severity  / solution dist=poisson covb;
+random intercept / subject=id type=unr;
+ods output ParameterEstimates=nlparms
+CovB=nlcovb
+AdditionalEstimates1=nlparmsa
+CovMatAddEst1=nlcovba;
+run;
+
+proc mianalyze parms=nlparms  wcov bcov tcov;
+modeleffects intercept time severity time*severity severity*severity;
+run;
+
+/* CCMV Sesnsitivity analysis*/
+proc mi data=lda.horiz2 seed=486048 simple out=lda.horiz_ccmv nimpute=1 minimum=0;
+title 'Model multiple imputation';
+var age group sev1 freq1 sev2 freq2 sev3 freq3;
+monotone reg;
+mnar model (sev1 freq1 sev2 freq2 sev3 freq3 / modelobs=ccmv);
+run;
+
+/* made data vertical again */
+data lda.ccmv;
+set lda.horiz_ccmv;
+array x (3) sev1 sev2 sev3;
+array y (3) freq1 freq2 freq3;
+do j=1 to 3;
+severity=x(j);
+frequency=y(j);
+time=j;
+output;
+end;
+run;
+
+data lda.ccmv;
+set lda.ccmv;
+if time=1 then time=0;
+if time=3 then time=12;
+if time=2 then time=3;
+format frequency 9.0;
+run;
+
+proc sort data=lda.ccmv;
+by _imputation_;
+run;
+
+proc glimmix data=lda.ccmv method=quad(qpoints=5) ;
+class id ;
+by _imputation_;
+model frequency = time severity time*severity  severity*severity/ solution dist=poisson covb;
+random intercept / subject=id type=unr;
+ods output ParameterEstimates=nlparms
+CovB=nlcovb
+AdditionalEstimates1=nlparmsa
+CovMatAddEst1=nlcovba;
+run;
+
+proc mianalyze parms=nlparms  wcov bcov tcov;
+modeleffects intercept time severity time*severity severity*severity;
+run;

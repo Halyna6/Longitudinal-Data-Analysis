@@ -1,0 +1,394 @@
+data student.aculda; 
+set student.aculda; 
+t=log(1+time); 
+run; 
+
+/* Descriptive statistics */
+
+proc means data=student.aculda;
+class group;
+var severity;
+run;
+
+Proc univariate data=student.aculda ;
+class t;
+var severity;
+histogram;
+run;
+
+
+/* Individual profiles */
+Proc sort data=student.aculda out=sample nodupkey dupout=Duplicate;
+by id;   
+Run;
+
+proc surveyselect data=sample method=srs n=100 out=random_sample;
+run;
+
+proc sort data=student.aculda;
+by id;
+run;
+
+proc sort data=random_sample;
+by id;
+run;
+
+data student.profiles;
+merge  random_sample(in=b) student.aculda(in=a);
+by id;
+if a and b;
+run;
+
+proc SGplot data = student.profiles noautolegend;
+series x=t y=lseverity / group =id 
+LineAttrs= (pattern=1);
+xaxis label = 'ln(Time+1)' ;
+run;
+
+proc SGpanel data = student.profiles;
+PanelBy group / columns=2;
+series x=t y=lseverity / group =id
+LineAttrs= (pattern=1);
+colaxis label = 'ln(Time+1)' ;
+run;
+
+
+/* Exploring the mean structure */
+
+/* severity*t */
+proc gplot data=student.aculda;
+plot severity*t  / haxis=axis1 vaxis=axis2;
+symbol c=black  i=std1mjt w=2 mode=include;
+axis1 label=(h=2  'ln(1+Time(months))') value=(h=1.5) order=(-0.5 to
+3 by 0.5) minor=none;
+axis2 label=(h=2 A=90 'lSeverity') value=(h=1.5)
+minor=none;
+run;quit;
+
+
+/* Calculate the means and the standard errors. */                                                                                      
+proc sort data=student.aculda;                                                                                                                    
+   by time;                                                                                                                              
+run;                                                                                                                                    
+                                                                                                                                        
+proc means data=student.aculda noprint;                                                                                                           
+   by time;                                                                                                                             
+   var severity;                                                                                                                            
+   output out=meansout mean=mean stderr=stderr;                                                                                         
+run;                                                                                                                                    
+ 
+proc print data=meansout;
+
+
+/* Mean structure by groups */ 
+Legend1 label=(color=black height=2 '') value=(color=black height=2 'Placebo group' 'Treatment group');
+proc gplot data=student.aculda;
+plot severity*time=group  / haxis=axis1 vaxis=axis2 legend=Legend1;
+symbol1 c=darkred  i=std1mjt w=2 mode=include;
+symbol2 c=darkblue  i=std1mjt w=2 mode=include;
+axis1 label=(h=2  'ln(1+Time(months))') value=(h=1.5) order=(-0.5 to
+3 by 0.5) minor=none;
+axis2 label=(h=2 A=90 'lSeverity') value=(h=1.5) 
+minor=none;
+run;quit;
+
+proc means data=student.aculda noprint;                                                                                                           
+   by group time ;                                                                                                                             
+   var severity;                                                                                                                            
+   output out=meansout mean=mean stderr=stderr;                                                                                         
+run; 
+
+
+/*Mean structure by age groups*/
+data student.aculda;
+set student.aculda;
+if age <30 then agegrp=1;
+else if 30 <= age < 40 then agegrp=2;
+else if 40 <= age < 50 then agegrp=3;
+else if 50 <= age < 66 then agegrp=4;
+run;
+
+data student.aculda2;
+set student.aculda;
+if group=1 then delete;
+run;
+
+data student.aculda3;
+set student.aculda;
+if group=0 then delete;
+run;
+
+
+Legend1 label=(color=black height=2 'Age group') value=(color=black height=2 '18-29' '30-39' '40-49' '50-65');
+proc gplot data=student.aculda;
+plot severity*t=agegrp  / haxis=axis1 vaxis=axis2 legend=legend1;
+symbol1 c=black  i=std1mjt w=2 mode=include line=1;
+symbol2 c=gray  i=std1mjt w=2 mode=include line=1;
+symbol3 c=darkred  i=std1mjt w=2 mode=include line=1;
+symbol4 c=darkblue  i=std1mjt w=2 mode=include line=1;
+axis1 label=(h=2  'ln(1+Time(months))') value=(h=1.5) order=(-0.5 to
+3 by 0.5) minor=none;
+axis2 label=(h=2 A=90 'Severity') value=(h=1.5)
+order=(10 to 35 by 5)
+minor=none;
+run;quit;
+
+
+
+/*Mean structure by frequency*/
+data student.aculda;
+set student.aculda;
+if frequency <12 then freqgrp=1;
+else if 12 <= frequency < 21 then freqgrp=2;
+else if 21 <= frequency < 28 then freqgrp=3;
+run;
+
+Legend1 label=(color=black height=2 'Frequency') value=(color=black height=2 '3-11' '12-20' '21-28');
+proc gplot data=student.aculda;
+plot severity*t=freqgrp  / haxis=axis1 vaxis=axis2 legend=legend1;
+symbol1 c=black  i=std1mjt w=2 mode=include line=1;
+symbol2 c=gray  i=std1mjt w=2 mode=include line=1;
+symbol3 c=darkred  i=std1mjt w=2 mode=include line=1;
+axis1 label=(h=2  'ln(1+Time(months))') value=(h=1.5) order=(-0.5 to
+3 by 0.5) minor=none;
+axis2 label=(h=2 A=90 'Severity') value=(h=1.5) order=(0 to
+60 by 10)
+minor=none;
+run;quit;
+
+
+proc sgplot data=student.aculda;
+scatter x=frequency y=severity /group=group;
+run;
+
+proc loess data=student.aculda;
+model severity=frequency;
+run;
+   
+/*Mean structure by chronicity*/
+data student.aculda;
+set student.aculda;
+if chronicity <19 then chrongrp=1;
+else if 20 <= chronicity < 37 then chrongrp=2;
+else if 38 <= chronicity < 54 then chrongrp=3;
+run;
+
+proc means data = student.aculda;
+class t agegrp;
+var severity;
+run;
+
+proc means data = student.aculda;
+class t freqgrp;
+var severity;
+run;
+
+proc means data = student.aculda;
+class t chrongrp;
+var severity;
+run;
+
+/* Treatment effect */
+data student.treat_effect;                    
+   input time mean_0 mean_1;  
+   treat=mean_0-mean_1;
+   t=log(1+time);
+   datalines;           
+0 27.453231327 25.608130098
+3 24.477124118 19.052023139
+12 22.343452357  16.246790932
+;                         
+
+proc print data=treat_effect;    
+run;
+
+proc gplot data=student.treat_effect;
+plot treat*t  / haxis=axis1 vaxis=axis2;
+symbol c=black i=join w=2 mode=include;
+axis1 label=(h=2  'ln(1+Time(months))') value=(h=1.5) order=(-0.5 to
+3 by 0.5) minor=none;
+axis2 label=(h=2 A=90 'Difference in mean severity') value=(h=1.5)
+order=(0 to 8 by 2)
+minor=none;
+run;quit;
+
+
+/* Exploring the variance function  */
+
+proc gplot data=student.aculda;
+plot severity*time  / haxis=axis1 vaxis=axis2;
+symbol c=black  i=std1jt w=2 mode=include;
+axis1 label=(h=2  'Time (months)') value=(h=1.5) order=(-3 to
+15 by 3) minor=none;
+axis2 label=(h=2 A=90 'Severity') value=(h=1.5)
+minor=none;
+title h=3 'Average evolution, with standard errors of means
+';
+run;quit;
+
+proc mixed data = student.aculda ;
+class id group tclass ;
+model severity = t frequency*frequency  group age chronicity frequency t*group t*age t*chronicity t*frequency group*age group*chronicity group*frequency group*age*t group*chronicity*t group*frequency*t /solution outp=pred;
+repeated tclass / type=un subject=id r rcorr ;
+run ;
+
+data student.var ;
+input group x y ;
+cards ;
+1 0 81.6833
+1 1.3862943611 148.22
+1 2.5649493575 145.17
+run ;
+
+
+proc gplot data=student.var;
+plot y*x / haxis=axis1 vaxis=axis2 ;
+symbol i = j value = W font = marker c = black h = 1 line = 1 width = 2;    
+title h=2.5 'Observed Variance Function' ;
+axis1 label =(h=2 'ln(Time+1)' ) value =(h=2) order=(-0.5 to 3 by 0.5) minor=none ;
+axis2 label =(h=2 angle=90 'Var(severity)' ) value =(h=2) w=5 order=(50 to 200 by 50)
+minor=none;
+run ;
+
+/* Alternative OLS by group */
+data student.aculda; 
+set student.aculda; 
+tclass=t; 
+run; 
+
+
+proc mixed data = student.aculda ;
+class id group tclass ;
+model severity = t group age frequency*frequency chronicity frequency t*group t*age t*chronicity t*frequency group*age group*chronicity group*frequency group*age*t group*chronicity*t group*frequency*t /solution outp=pred;
+repeated tclass / type=un subject=id group=group r rcorr ;
+run ;
+
+
+data student.var ;
+input group x y ;
+cards ;
+0 0 74.8764
+0 1.3862943611 146.77
+0 2.5649493575 140.05
+1 0 88.1915
+1 1.3862943611 150.02
+1 2.5649493575 150.27
+run ;
+
+
+Legend1 label=(color=black height=2 '') value=(color=black height=2 'Control group' 'Treatment group');
+proc gplot data=student.var;
+plot y*x=group / haxis=axis1 vaxis=axis2 legend=Legend1 ;
+symbol1 i = j value = W font = marker c = darkred h = 1 line = 1 width = 2;    
+symbol2 i = j value = W font = marker c = darkblue h = 1 line = 1 width = 2;    
+axis1 label =(h=2 'ln(Time+1)' ) value =(h=2) order=(-0.5 to 3 by 0.5) minor=none ;
+axis2 label =(h=2 angle=90 'Var(severity)' ) value =(h=2) w=5 order=(50 to 200 by 50)
+minor=none;
+run ;
+
+/* Residuals */
+proc sort data=pred; 
+by t; 
+run;
+
+proc sgplot data=pred;  
+series y=Resid x=t / group=id;
+run;  
+
+/* Subsample */
+
+Proc sort data=pred out=sample_pred nodupkey dupout=Duplicate;
+by id;   
+Run;
+
+proc surveyselect data=sample_pred method=srs n=60 out=random_sample_pred;
+run;
+
+proc sort data=pred;
+by id;
+run;
+
+proc sort data=random_sample_pred;
+by id;
+run;
+
+data student.profiles_pred;
+merge  random_sample_pred(in=b) pred(in=a);
+by id;
+if a and b;
+run;
+
+proc SGplot data = student.profiles_pred noautolegend;
+series x=t y=Resid / group =id 
+LineAttrs= (pattern=1);
+xaxis label = 'ln(Time+1)' ;
+run;
+
+proc SGpanel data = student.profiles_pred;
+PanelBy group / columns=2;
+series x=t y=Resid / group =id
+LineAttrs= (pattern=1);
+colaxis label = 'ln(Time+1)' ;
+run;
+
+
+/* Correlation structure */
+data student.t0;
+set student.aculda;
+if time^=0 then delete;
+t0=severity;
+run;
+
+data student.t3;
+set student.aculda;
+if time^=3 then delete;
+t3=severity;
+run;
+
+data student.t12;
+set student.aculda;
+if time^=12 then delete;
+t12=severity;
+run;
+
+data student.time;
+merge  student.t0 student.t3 student.t12;
+by id;
+run;
+
+proc corr data=student.time plot=matrix(histogram);
+var t0 t3 t12;
+run;
+
+/* Random-effects model */
+
+proc mixed data= student.aculda nobound method=reml ic;
+class group id tclass;
+model severity = group frequency frequency*frequency age group*t frequency*t age*group frequency*group age*t frequency*t*group/ solution  s ddfm=satterth covb chisq;;
+random intercept t  / type=un subject=id g gcorr v vcorr ;
+repeated tclass ;
+Run;
+
+/* the fitted variance function */
+data student.fitvar;
+do x=0 to 2.6 by 0.1;
+   group=2;
+   y = -2.4828*(x**2) + 2*15.9449*x + 21.5090 + 69.54;
+   output;
+end;
+
+
+/* combining the fitted and observed variances in one data set */
+data student.var2;
+set student.var student.fitvar;
+run;
+
+/* creating the plot*/
+Legend1 label=(color=black height=2 '') value=(color=black height=2 'Observed variance' 'Fitted variance');
+proc gplot data=student.var2;
+plot y*x=group / haxis=axis1 vaxis=axis2 legend=Legend1 ;
+symbol1 c=darkred value=dot h=1.5  i=join w=2 l=1 mode=include ;
+symbol2 c=darkblue i=join w=2 l=1 mode=include ;
+axis1 label =(h=2 'ln(Time+1)' ) value =(h=2) order=(-0.5 to 3 by 0.5) minor=none ;
+axis2 label =(h=2 angle=90 'Var(severity)' ) value =(h=2) w=2 order=(0 to 200 by 50);
+run;

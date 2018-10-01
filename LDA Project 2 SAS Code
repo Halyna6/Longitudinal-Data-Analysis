@@ -1,0 +1,539 @@
+/* Descriptive statistics */
+
+proc freq data = student.aculda2;
+Run;
+
+proc means data=student.aculda2 median;
+class time;
+var chronicity;
+run;
+
+proc means data=student.aculda2;
+class group time;
+var frequency;
+run;
+
+Proc univariate data=student.aculda2 ;
+class time;
+var frequency;
+histogram;
+run;
+
+
+
+
+/* Individual profiles */
+Proc sort data=student.aculda2 out=sample nodupkey dupout=Duplicate;
+by id;   
+Run;
+
+proc surveyselect data=sample method=srs n=60 out=random_sample;
+run;
+
+proc sort data=student.aculda2;
+by id;
+run;
+
+proc sort data=random_sample;
+by id;
+run;
+
+data student.profiles;
+merge  random_sample(in=b) student.aculda2(in=a);
+by id;
+if a and b;
+run;
+
+proc SGplot data = student.profiles noautolegend;
+series x=time y=frequency / group =id 
+LineAttrs= (pattern=1);
+xaxis label = 'Time' ;
+run;
+
+proc SGpanel data = student.profiles;
+PanelBy group / columns=2;
+series x=time y=frequency / group =id
+LineAttrs= (pattern=1);
+colaxis label = 'Time' ;
+run;
+
+
+/*Mean structure by age groups*/
+data student.aculda2;
+set student.aculda2;
+if age <48 then agegrp=1;
+else if age >= 48 then agegrp=2;
+/*else if 50 <= age < 66 then agegrp=3;
+/*else if 50 <= age < 66 then agegrp=4;*/
+run;
+
+Legend1 label=(color=black height=2 'Age group') value=(color=black height=2 'Below 48 years' 'Above 48 years');
+proc gplot data=student.aculda2;
+plot frequency*time=agegrp  / haxis=axis1 vaxis=axis2 legend=legend1;
+symbol1 c=darkred  i=std1mjt w=2 mode=include line=1;
+symbol2 c=darkblue  i=std1mjt w=2 mode=include line=1;
+symbol3 c=darkred  i=std1mjt w=2 mode=include line=1;
+symbol4 c=darkblue  i=std1mjt w=2 mode=include line=1;
+axis1 label=(h=2  'Time (months)') value=(h=1.5) order=(-3 to
+15 by 3) minor=none;
+axis2 label=(h=2 A=90 'Frequency') value=(h=1.5) order=(8 to 20 by 2) minor=none;
+run;quit;
+
+data student.aculda2;
+set student.aculda2;
+if chronicity <20 then chrongrp=1;
+else if chronicity >=20 then chrongrp=2;
+/*else if 37 <= chronicity < 100 then chrongrp=3;*/
+run;
+
+Legend1 label=(color=black height=2 'Chronicity groups') value=(color=black height=2 'Below 20' 'Above 20' );
+proc gplot data=student.aculda2;
+plot frequency*time=chrongrp  / haxis=axis1 vaxis=axis2 legend=legend1;
+symbol1 c=darkred  i=std1mjt w=2 mode=include line=1;
+symbol2 c=darkblue i=std1mjt w=2 mode=include line=1;
+axis1 label=(h=2  'Time (months)') value=(h=1.5) order=(-3 to
+15 by 3) minor=none;
+axis2 label=(h=2 A=90 'Frequency') value=(h=1.5) order=(8 to 20 by 5) minor=none;
+run;quit;
+
+
+
+
+
+/*transition model*/
+
+/*create 1st order autoregressive covariate*/
+%dropout(data=lda.nozero,id=id,time=time,
+response=frequency,out=lda.transition);
+
+data lda.transition1;
+set lda.transition;
+prev1=prev;
+drop prev;
+run;
+
+data lda.transition1;
+set lda.transition1;
+prev1a = prev1;
+if time>3 then prev1a=0;
+run;
+
+/*create 1st order transition model with all possible covariates*/
+proc genmod data= lda.transition1 descending;
+model frequency = group time group*time age age*time chronicity chronicity*time age*chronicity prev1 prev1a/ dist=poisson;
+run;
+/*time, chronicity, chronicity*time, age*chronicity, and prev1a are not significant.. prev1 is*/
+
+/*reduced model*/
+proc genmod data= lda.transition1 descending;
+model frequency = group time group*time chronicity prev1/ dist=poisson;
+run;
+/*take out in order prev1a, age*chronicity, chronicity*time, age*time, and age*/
+
+/*create 2nd order autoregressive covariate*/
+%dropout(data=lda.transition1,id=id,time=time,
+response=prev1,out=lda.transition2);
+
+data lda.transition2;
+set lda.transition2;
+prev2=prev;
+drop prev;
+run;
+
+/*create 2nd order transition model*/
+proc genmod data= lda.transition2 descending;
+model frequency = group time group*time chronicity prev1 prev2/ dist=poisson;
+run;
+/*time is not estimable*/
+
+
+
+/******** Standard GEE **********/
+data student.aculda2(drop=i);                       
+set student.aculda2; 
+array testzero(*) Frequency;       
+do i = 1 to dim(testzero);                 
+if testzero(i)=0 then testzero(i)=.;       
+end;                                       
+run;
+
+data student.aculda2;
+set student.aculda2;
+timeclss = time;
+run;
+
+/*Exchangeable working correlation*/
+
+/* ALTERNATIVE PARAMETERIZATION */
+PROC GENMOD DATA=student.aculda2;
+CLASS id timeclss group;
+model frequency=  group age group*time age*time / noint dist=poisson;
+REPEATED SUBJECT=id / WITHINSUBJECT=timeclss TYPE=exch CORRW covb modelse;
+ESTIMATE 'Treatment effect' group*time 1 -1;
+estimate'Diff. groups at baseline' group 1 -1;
+RUN;
+
+
+proc genmod data=student.aculda2;
+class id timeclss;
+model frequency= time group age group*time age*time   / dist=poisson;
+repeated subject=id /withinsubject=timeclss type=exch covb corrw modelse;
+ESTIMATE 'Treatment effect' group*time 1 1;
+run;
+
+
+/*Independence working correlation*/
+proc genmod data=student.aculda2;
+class id timeclss;
+model frequency= time group age group*time age*time / dist=poisson;
+repeated subject=id /withinsubject=timeclss type=ind covb corrw modelse;
+run;
+
+
+/*Unstructured working correlation*/
+proc genmod data=student.aculda2;
+class id timeclss;
+model frequency= time group age group*time age*time / dist=poisson;
+repeated subject=id /withinsubject=timeclss type=unstr covb corrw modelse;
+run;
+
+
+
+
+/******** Linearization based GEE **********/
+/*Exchangeable working correlation*/
+proc glimmix data=student.aculda2 method=RSPL empirical;
+class id timeclss;
+model frequency= time group age group*time age*time  / dist=poisson solution;
+random _residual_ /subject=id type=cs;
+run;
+
+
+/*Independence working correlation*/
+proc glimmix data=student.aculda2 method=RSPL empirical;
+class id timeclss;
+model frequency= time group age group*time age*time   / dist=poisson solution;
+random _residual_ /subject=id type=simple;
+run;
+
+
+/*Unstructured working correlation*/
+proc glimmix data=student.aculda2 method=RSPL empirical;
+class id timeclss;
+model frequency= time group age group*time age*time / dist=poisson solution;
+random _residual_ /subject=id type=un;
+run;
+
+
+
+/******** Comparison of slopes GEE1 ********/
+data student.comparison;
+do x=0 to 12 by 1;
+   y_g0 = exp((2.8156-0.0016*48)+(-0.0317+0.0004*48)*x)    ;
+   y_g1 = exp((2.8156-0.0016*48)+(-0.0317+0.0004*48-0.0109)*x )    ;
+   output;
+end;
+
+
+data student.comparison;
+do x=0 to 12 by 1;
+   y_g0 = exp((2.8504-0.0015*48)+(-0.0595+0.0004*48)*x+(0.0023*x*x))    ;
+   y_g1 = exp((2.8504-0.0015*48)+(-0.0595+0.0004*48-0.0592+0.0023*x+0.0039*x)*x)  ;
+   output;
+end;
+
+data student.comparison;
+do x=0 to 12 by 1;
+   y_g0 = exp((2.8530-0.0015*48)+(0.0004*48)*x+(-0.1102*sqrt(x)))    ;
+   y_g1 = exp((2.8530-0.0015*48)+(0.0004*48)*x+((-0.1102-0.0447)*sqrt(x)))  ;
+   output;
+end;
+
+
+data student.comparison;
+do x=0 to 12 by 1;
+   y_g0 = exp((2.8345-0.0011*48)+(0.0002*48)*x+(-0.1109*(x**(1/3))))    ;
+   y_g1 = exp((2.8345-0.0011*48)+(0.0002*48)*x+((-0.1109-0.0693)*(x**(1/3))))  ;
+   output;
+end;
+
+Legend1 label=(color=black height=2 '') value=(color=black height=2 'Control group' 'Treatment group');
+proc gplot data=student.comparison;                                                                                                                   
+   plot (y_g0 y_g1)*x / overlay legend=legend1 haxis=axis1 vaxis=axis2;
+symbol1 c=darkred h=1.5  i=join w=2 l=1 mode=include ;
+symbol2 c=darkblue h=1.5  i=join w=2 l=1 mode=include ;
+axis1 label =(h=2 'Time' ) value =(h=2) minor=none ;
+axis2 label =(h=2 angle=90 'Frequency' ) value =(h=2) w=2 order=(8 to 18 by 2);
+run; 
+
+proc print data=student.comparison;
+run;
+% * <anja.belcijan@gmail.com> 2018-01-06T20:24:07.036Z:
+%
+% ^.
+
+
+/* GLIMMIX */
+/*random-effects model*/
+/*adaptive quadrature*/
+proc glimmix data=stats.aculda2  method=quad(qpoints=5);
+class id;
+model frequency= age time group*time age*time/ dist=poisson solution;
+random intercept time / type=UNR subject=id solution;
+run;
+
+/*other estimation methods~LAPLACE*/
+proc glimmix data=stats.aculda2 method=LAPLACE;
+class id;
+model frequency= age time group*time age*time / dist=poisson solution;
+random intercept time / type=UNR subject=id;
+run;
+
+/*other estimation methods~REML PQL*/
+proc glimmix data=stats.aculda2 method=RSPL;
+class id ;
+model frequency= age  time group*time age*time / dist=poisson solution;
+random intercept time / type=UNR subject=id;
+run;
+
+/*other estimation methods~REML MQL*/
+proc glimmix data=stats.aculda2 method=RMPL pconv=1.11022e-7 ;
+class id ;
+model frequency= age time group*time age*time / dist=poisson solution;
+random intercept time / type=UNR subject=id;
+run;
+
+/*other estimation methods~ML PQL*/
+proc glimmix data=stats.aculda2 method=MSPL;
+class id ;
+model frequency= age time group*time age*time / dist=poisson solution;
+random intercept time / type=UN subject=id;
+run;
+
+/*other estimation methods~ML MQL*/
+proc glimmix data=stats.aculda2 method=MMPL;
+class id ;
+model frequency= age  time group*time age*time / dist=poisson solution;
+random intercept time / type=UN subject=id;
+run;
+
+/* NLMIXED */
+/* non adaptive with initial of PQL REML (q=10) */
+proc nlmixed data=stats.aculda2 noad qpoints=10;
+parms beta0=2.7833 beta1=-0.00211 beta2=-0.03647 beta3=-0.01085 beta4=0.000412
+d11=1 rho=0 d22=0.1;
+if (group = 0) then eta = beta0 + b1 + beta1*age + beta2*time +b2*time +beta3*group*time +beta4*age*time;
+else if (group = 1) then eta = beta0 + b1 + beta1*age + beta2*time +b2*time +beta3*group*time +beta4*age*time;
+lambda = exp(eta);
+model frequency ~ poisson(lambda);
+random b1 b2 ~ normal([0, 0] , [d11, rho*sqrt(d11)*sqrt(d22), d22]) subject = id;
+estimate "diff slopes" beta1-beta2;
+run;
+
+/* adaptive with initial of PQL REML (q=5)  */
+proc nlmixed data=stats.aculda2 qpoints=5;
+parms beta0=2.7833 beta1=-0.00211 beta2=-0.03647 beta3=-0.01085 beta4=0.000412
+d11=1 rho=0 d22=0.1;
+if (group = 0) then eta = beta0 + b1 + beta1*age + beta2*time +b2*time +beta3*group*time +beta4*age*time;
+else if (group = 1) then eta = beta0 + b1 + beta1*age + beta2*time +b2*time +beta3*group*time +beta4*age*time;
+lambda = exp(eta);
+model frequency ~ poisson(lambda);
+random b1 b2 ~ normal([0, 0] , [d11, rho*sqrt(d11)*sqrt(d22), d22]) subject = id;
+estimate "diff slopes" beta1-beta2;
+run;
+
+/* adaptive with initial of PQL REML (q=10) */
+proc nlmixed data=stats.aculda2 qpoints=10;
+parms beta0=2.7833 beta1=-0.00211 beta2=-0.03647 beta3=-0.01085 beta4=0.000412
+d11=1 rho=0 d22=0.1;
+if (group = 0) then eta = beta0 + b1 + beta1*age + beta2*time +b2*time +beta3*group*time +beta4*age*time;
+else if (group = 1) then eta = beta0 + b1 + beta1*age + beta2*time +b2*time +beta3*group*time +beta4*age*time;
+lambda = exp(eta);
+model frequency ~ poisson(lambda);
+random b1 b2 ~ normal([0, 0] , [d11, rho*sqrt(d11)*sqrt(d22), d22]) subject = id;
+estimate "diff slopes" beta1-beta2;
+run;
+
+/* adaptive with initial of ML PQL */
+proc nlmixed data=stats.aculda2 qpoints=5;
+parms beta0=2.7831 beta1=-0.00211 beta2=-0.03638 beta3=-0.0108 beta4=0.00041
+d11=1 rho=0 d22=0.1;
+if (group = 0) then eta = beta0 + b1 + beta1*age + beta2*time +b2*time +beta3*group*time +beta4*age*time;
+else if (group = 1) then eta = beta0 + b1 + beta1*age + beta2*time +b2*time +beta3*group*time +beta4*age*time;
+lambda = exp(eta);
+model frequency ~ poisson(lambda);
+random b1 b2 ~ normal([0, 0] , [d11, rho*sqrt(d11)*sqrt(d22), d22]) subject = id;
+estimate "diff slopes" beta1-beta2;
+run;
+
+/* adaptive with initial of ML MQL  */
+proc nlmixed data=stats.aculda2 qpoints=5;
+parms beta0=2.8119 beta1=-0.0015 beta2=-0.03292 beta3=-0.01009 beta4=0.000441
+d11=1 rho=0 d22=0.1;
+if (group = 0) then eta = beta0 + b1 + beta1*age + beta2*time +b2*time +beta3*group*time +beta4*age*time;
+else if (group = 1) then eta = beta0 + b1 + beta1*age + beta2*time +b2*time +beta3*group*time +beta4*age*time;
+lambda = exp(eta);
+model frequency ~ poisson(lambda);
+random b1 b2 ~ normal([0, 0] , [d11, rho*sqrt(d11)*sqrt(d22), d22]) subject = id;
+estimate "diff slopes" beta1-beta2;
+run;
+
+/* adaptive with initial of non adaptive (q=5) with PQL REML */
+proc nlmixed data=stats.aculda2 qpoints=5;
+parms beta0=2.808 beta1=-0.0022 beta2=-0.03572 beta3=-0.01323 beta4=0.000423
+d11=0.1428 rho=0.5176 d22=0.000394;
+if (group = 0) then eta = beta0 + b1 + beta1*age + beta2*time +b2*time +beta3*group*time +beta4*age*time;
+else if (group = 1) then eta = beta0 + b1 + beta1*age + beta2*time +b2*time +beta3*group*time +beta4*age*time;
+lambda = exp(eta);
+model frequency ~ poisson(lambda);
+random b1 b2 ~ normal([0, 0] , [d11, rho*sqrt(d11)*sqrt(d22), d22]) subject = id;
+estimate "diff slopes" beta1-beta2;
+run;
+
+/*random slopes and intercepts*/
+data work.outfile;
+set work.outfile;
+keep subject estimate effect;
+run;
+
+data work.outfileslope;
+set work.outfile;
+if mod(_n_,2)=0;
+rename estimate=ranslope;
+run;
+
+data work.outfileint;
+set work.outfile;
+if mod(_n_,2)=1;
+rename estimate=ranint;
+run;
+
+data work.outfileall;
+merge outfileslope outfileint;
+by subject;
+run;
+
+data timezero;
+set home.aculda2;
+where time=0;
+run;
+
+/*finally create dataset with age and slopes*/
+data full;
+merge timezero work.outfileall;
+run;
+
+/*slopes vs intercepts plot*/
+proc gplot data=work.full;
+plot ranslope*ranint/overlay;
+run;
+quit;
+
+proc sort data=work.full;
+by group;
+run;
+proc univariate data=work.full;
+hist ranslope ranint;
+by group;
+run;
+
+data work.full;
+set work.full;
+if (age <48) then agegroup=0;
+else if (48<=age) then agegroup=1;
+run;
+proc sort data=work.full;
+by agegroup;
+run;
+proc univariate data=work.full;
+hist ranslope ranint;
+by agegroup;
+run;
+
+/* Marginal evolution (GLMM) */
+
+proc glimmix data=student.aculda2 method=quad(qpoints=5);
+class id;
+model frequency= time age group*time age*time/ dist=poisson solution;
+random intercept time / type=UNR subject=id solution GC;
+ods output solutionr=outfile;
+run;
+
+
+
+data student.aculda2;
+do treat=0 to 1 by 1;
+do subject=1 to 1000 by 1;
+b1=rannor(-1);b2=rannor(-1);
+
+ranint=0.3755*b1; ranslope=0.01301*b1 + 0.0073*b2;
+do t=0 to 12 by 0.1;
+if treat=0 then y=exp(2.7689-0.00205*48+ranint
++(-0.03725+0.000412*48+ranslope)*t);
+else y=exp(2.7689-0.00205*48+ranint
++(-0.03725+0.000412*48-0.01083+ranslope)*t);
+output;
+end;
+end;
+end;
+proc sort data=student.aculda2;
+by t treat;
+run;
+proc means data=student.aculda2;
+var y;
+by t treat;
+output out=out;
+run;
+
+proc gplot data=out;
+plot y*t=treat / haxis=axis1 vaxis=axis2 legend=legend1;
+axis1 label=(h=2.5 'Time (weeks)') value=(h=1.5)
+minor=none;
+axis2 label=(h=2.5 A=90 'E(Y)') value=(h=1.5)
+ minor=none order=(11 to 18 by 2);
+legend1 label=(h=2 'Treatment: ')
+value=(h=2 'Placebo' 'Treated');
+title h=3 'Marginal average evolutions (GLMM)';
+symbol1 c=black i=join w=2 l=1 mode=include;
+symbol2 c=black i=join w=2 l=2 mode=include ;
+where _stat_='MEAN';
+run;
+
+/*evolution of average patient GLMM*/
+data meanpat;
+set home.aculda2;
+do group=0 to 1 by 1;
+do subject=1 to 100 by 1;
+do age=18 to 65 by 1;
+do time=0 to 12 by 0.1;
+
+if group=0 then frequency=exp(2.7689-0.00205*age
++(-0.03725)*time+0.000412*age*time);
+else frequency=exp(2.7689-0.00205*age
++(-0.03725-0.01083)*time+0.000412*age*time);
+output;
+end;
+end;
+end;
+end;
+proc sort data=meanpat;
+by time group;
+run;
+proc means data=meanpat;
+var frequency;
+by time group;
+output out=outpat;
+run;
+proc gplot data=outpat;
+plot frequency*time=group / haxis=axis1 vaxis=axis2 legend=legend1;
+axis1 label=(h=2.5 'Time (months)') value=(h=1.5)
+minor=none;
+axis2 label=(h=2.5 A=90 'E(Y)') value=(h=1.5)
+ minor=none order=(11 to 18 by 2);
+legend1 label=(h=2 'Treatment: ')
+value=(h=2 'Control group' 'Treatment group');
+title h=3 'Evolution of the average patient (GLMM)';
+symbol1 c=darkred i=join w=2 l=1 mode=include;
+symbol2 c=darkblue i=join w=2 l=1 mode=include ;
+where _stat_='MEAN';
+run;
